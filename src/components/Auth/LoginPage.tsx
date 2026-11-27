@@ -153,7 +153,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <div>
                 <h2 className="text-sm font-bold text-white">Kalender, Matriks SPPD &amp; Ekspor Laporan</h2>
                 <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                  Pemantauan jadwal bulanan, scan kamera daftar nama, sinkronisasi Excel, serta pencetakan dokumen SPPD berformat PDF.
+                  Pemantauan jadwal bulanan, sinkronisasi Excel, serta pencetakan dokumen SPPD berformat PDF.
                 </p>
               </div>
             </div>

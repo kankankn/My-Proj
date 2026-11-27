@@ -72,7 +72,7 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({
 
     const payload: AppBackupPayload = {
       app: 'KENDALI-SPPD',
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
       data: {
         departments,

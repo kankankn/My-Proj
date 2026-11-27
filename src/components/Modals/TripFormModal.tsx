@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, 
   Calendar, 
@@ -14,11 +14,6 @@ import {
   ArrowDownAZ,
   ArrowUpAZ,
   Filter,
-  Camera,
-  Sparkles,
-  UploadCloud,
-  Loader2,
-  CheckCircle2,
   CalendarOff
 } from 'lucide-react';
 import { BusinessTrip, Department, Employee, ConflictRecord, HolidayEntry } from '../../types/trip';
@@ -30,8 +25,6 @@ import {
 } from '../../utils/dateUtils';
 import { getDeptBadgeStyle } from '../../utils/colorUtils';
 import { getAsnBadgeClass } from '../../utils/asnUtils';
-import { matchScannedNamesWithEmployees } from '../../utils/nameSimilarity';
-import { CameraNameScannerModal } from './CameraNameScannerModal';
 
 interface TripFormModalProps {
   isOpen: boolean;
@@ -44,7 +37,6 @@ interface TripFormModalProps {
   allTrips: BusinessTrip[];
   holidays?: HolidayEntry[];
   lockedBidangId?: string;
-  authToken?: string;
 }
 
 export const TripFormModal: React.FC<TripFormModalProps> = ({
@@ -58,7 +50,6 @@ export const TripFormModal: React.FC<TripFormModalProps> = ({
   allTrips,
   holidays = [],
   lockedBidangId,
-  authToken,
 }) => {
   const defaultDate = initialDate || formatDateKey(new Date());
 
@@ -77,32 +68,6 @@ export const TripFormModal: React.FC<TripFormModalProps> = ({
   const [employeeFilterDept, setEmployeeFilterDept] = useState<string>('ALL');
   const [employeeFilterAsn, setEmployeeFilterAsn] = useState<string>('ALL');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isCameraScannerOpen, setIsCameraScannerOpen] = useState(false);
-  const [isUploadingImage, setIsUploadingImage] = useState(false);
-  const [uploadScanNotice, setUploadScanNotice] = useState<{
-    type: 'success' | 'warning' | 'error';
-    message: string;
-    details?: string[];
-  } | null>(null);
-  const directImageInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Callback when scanner applies detected employees
-  const handleApplyFromScanner = (
-    scannedIds: string[],
-    details?: {
-      nomorSurat?: string | null;
-      namaKegiatan?: string | null;
-      tujuan?: string | null;
-    }
-  ) => {
-    setSelectedEmpIds(prev => Array.from(new Set([...prev, ...scannedIds])));
-    if (details) {
-      if (details.nomorSurat && !nomorSurat) setNomorSurat(details.nomorSurat);
-      if (details.namaKegiatan && !namaKegiatan) setNamaKegiatan(details.namaKegiatan);
-      if (details.tujuan && !tujuan) setTujuan(details.tujuan);
-    }
-    setErrorMessage(null);
-  };
 
   // Sync state when editing or opening with initialDate
   useEffect(() => {
@@ -118,8 +83,6 @@ export const TripFormModal: React.FC<TripFormModalProps> = ({
       setKeterangan(tripToEdit.keterangan || '');
       setBiayaAnggaran(tripToEdit.biayaAnggaran || '');
       setErrorMessage(null);
-      setUploadScanNotice(null);
-      setIsUploadingImage(false);
     } else {
       const todayStr = initialDate || formatDateKey(new Date());
       setNomorSurat('');
@@ -135,8 +98,6 @@ export const TripFormModal: React.FC<TripFormModalProps> = ({
       const initialYear = todayStr.split('-')[0] || String(new Date().getFullYear());
       setBiayaAnggaran(initialYear);
       setErrorMessage(null);
-      setUploadScanNotice(null);
-      setIsUploadingImage(false);
     }
   }, [tripToEdit, initialDate, departments, isOpen, lockedBidangId]);
 
@@ -231,150 +192,6 @@ export const TripFormModal: React.FC<TripFormModalProps> = ({
     }
   };
 
-  // Direct image upload handler -> detects Name & NIP and auto-checks conflict-free employees
-  const handleDirectImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-
-    setIsUploadingImage(true);
-    setUploadScanNotice(null);
-    setErrorMessage(null);
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const base64Image = event.target?.result as string;
-        if (!base64Image) {
-          setUploadScanNotice({
-            type: 'error',
-            message: 'Gagal membaca file gambar yang dipilih.',
-          });
-          return;
-        }
-
-        const mimeMatch = base64Image.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
-        const detectedMimeType = mimeMatch ? mimeMatch[1] : file.type || 'image/jpeg';
-
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (authToken) {
-          headers.Authorization = `Bearer ${authToken}`;
-        }
-
-        const response = await fetch('/api/scan-document', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            imageBase64: base64Image,
-            mimeType: detectedMimeType,
-          }),
-        });
-
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-          setUploadScanNotice({
-            type: 'error',
-            message: data.error || 'Gagal memindai gambar daftar petugas.',
-          });
-          return;
-        }
-
-        if (data.source === 'no_api_key') {
-          setUploadScanNotice({
-            type: 'warning',
-            message: 'GEMINI_API_KEY belum dikonfigurasi pada server. Gunakan Scan Kamera > Salin / Tempel Teks sebagai alternatif.',
-          });
-          return;
-        }
-
-        const detectedList: string[] = Array.isArray(data.detectedNames) ? data.detectedNames : [];
-        if (detectedList.length === 0) {
-          setUploadScanNotice({
-            type: 'warning',
-            message: 'Tidak ada nama atau NIP pegawai yang terbaca jelas pada gambar.',
-          });
-          return;
-        }
-
-        const matches = matchScannedNamesWithEmployees(detectedList, employees);
-        const autoCheckIds: string[] = [];
-        const autoCheckedNames: string[] = [];
-        const skippedConflicts: string[] = [];
-        const unmatchedTexts: string[] = [];
-
-        for (const item of matches) {
-          if (item.matchedEmployee && item.score >= 60) {
-            const emp = item.matchedEmployee;
-            const empConflicts = checkTripConflicts(
-              [emp.id],
-              tanggalMulai,
-              tanggalSelesai,
-              allTrips,
-              employees,
-              departments,
-              tripToEdit?.id
-            );
-            if (empConflicts.length > 0) {
-              skippedConflicts.push(`${emp.nama} (bentrok ${formatIndonesianDate(empConflicts[0].conflictingDate)})`);
-            } else {
-              autoCheckIds.push(emp.id);
-              autoCheckedNames.push(`${emp.nama}${item.score >= 88 ? '' : ` (${item.score}%)`}`);
-            }
-          } else {
-            unmatchedTexts.push(item.rawScannedText);
-          }
-        }
-
-        if (autoCheckIds.length > 0) {
-          setSelectedEmpIds(prev => Array.from(new Set([...prev, ...autoCheckIds])));
-        }
-
-        if (data.extractedDetails) {
-          const det = data.extractedDetails;
-          if (det.nomorSurat && !nomorSurat) setNomorSurat(det.nomorSurat);
-          if (det.namaKegiatan && !namaKegiatan) setNamaKegiatan(det.namaKegiatan);
-          if (det.tujuan && !tujuan) setTujuan(det.tujuan);
-        }
-
-        const detailLines: string[] = [];
-        if (autoCheckedNames.length > 0) {
-          detailLines.push(`Tercentang otomatis: ${autoCheckedNames.join(', ')}`);
-        }
-        if (skippedConflicts.length > 0) {
-          detailLines.push(`Dilewati (bentrok jadwal): ${skippedConflicts.join(', ')}`);
-        }
-        if (unmatchedTexts.length > 0) {
-          detailLines.push(`Tidak ditemukan di data pegawai: ${unmatchedTexts.join(', ')}`);
-        }
-
-        setUploadScanNotice({
-          type: autoCheckIds.length > 0 && skippedConflicts.length === 0 && unmatchedTexts.length === 0
-            ? 'success'
-            : 'warning',
-          message:
-            autoCheckIds.length > 0
-              ? `${autoCheckIds.length} pegawai terdeteksi dari gambar dan langsung tercentang otomatis.`
-              : 'Gambar dipindai, namun belum ada pegawai bebas tugas yang cocok otomatis.',
-          details: detailLines,
-        });
-      } catch {
-        setUploadScanNotice({
-          type: 'error',
-          message: 'Gagal memproses gambar daftar petugas. Periksa koneksi atau coba gambar lain.',
-        });
-      } finally {
-        setIsUploadingImage(false);
-      }
-    };
-    reader.onerror = () => {
-      setIsUploadingImage(false);
-      setUploadScanNotice({
-        type: 'error',
-        message: 'Tidak dapat membaca file gambar yang dipilih.',
-      });
-    };
-    reader.readAsDataURL(file);
-  };
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -693,94 +510,12 @@ export const TripFormModal: React.FC<TripFormModalProps> = ({
               </label>
 
               <div className="flex items-center gap-2 flex-wrap">
-                {/* Direct image upload button for detecting Name & NIP and auto-checking */}
-                <input
-                  ref={directImageInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleDirectImageUpload}
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  disabled={isUploadingImage}
-                  onClick={() => directImageInputRef.current?.click()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-200 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-300 dark:border-emerald-700 disabled:opacity-60 rounded-lg shadow-2xs transition-colors cursor-pointer"
-                  title="Upload gambar daftar petugas (Nama / NIP) untuk langsung mencentang pegawai secara otomatis"
-                >
-                  {isUploadingImage ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
-                      <span>Memindai Gambar...</span>
-                    </>
-                  ) : (
-                    <>
-                      <UploadCloud className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                      <span>Upload Gambar</span>
-                    </>
-                  )}
-                </button>
-
-                {/* Button to open camera scanner tool */}
-                <button
-                  type="button"
-                  onClick={() => setIsCameraScannerOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-gradient-to-r from-indigo-600 via-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 rounded-lg shadow-2xs hover:shadow-md transition-all cursor-pointer ring-2 ring-indigo-400/20"
-                  title="Scan Surat Tugas / SPPD menggunakan kamera untuk mendeteksi nama dan indikasi kemiripan secara otomatis"
-                >
-                  <Camera className="w-3.5 h-3.5" />
-                  <span>Scan Kamera (Deteksi Nama)</span>
-                  <span className="text-[10px] bg-white/20 px-1.5 py-0.2 rounded-full font-semibold">AI</span>
-                </button>
-
                 <span className="hidden sm:flex text-[11px] text-slate-700 items-center gap-1">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                   Anti-Bentrok
                 </span>
               </div>
             </div>
-
-            {uploadScanNotice && (
-              <div
-                className={`p-3 rounded-xl border text-xs flex items-start justify-between gap-2.5 ${
-                  uploadScanNotice.type === 'success'
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                    : uploadScanNotice.type === 'warning'
-                    ? 'bg-amber-50 border-amber-200 text-amber-900'
-                    : 'bg-rose-50 border-rose-200 text-rose-900'
-                }`}
-              >
-                <div className="flex items-start gap-2 min-w-0">
-                  {uploadScanNotice.type === 'success' ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertTriangle
-                      className={`w-4 h-4 shrink-0 mt-0.5 ${
-                        uploadScanNotice.type === 'warning' ? 'text-amber-600' : 'text-rose-600'
-                      }`}
-                    />
-                  )}
-                  <div className="space-y-1 min-w-0">
-                    <div className="font-semibold">{uploadScanNotice.message}</div>
-                    {uploadScanNotice.details && uploadScanNotice.details.length > 0 && (
-                      <ul className="space-y-0.5 text-[11px] opacity-90">
-                        {uploadScanNotice.details.map((line, i) => (
-                          <li key={i}>• {line}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setUploadScanNotice(null)}
-                  className="text-xs font-bold opacity-60 hover:opacity-100 px-1 cursor-pointer shrink-0"
-                  aria-label="Tutup pemberitahuan upload"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
 
             {/* Quick search & Sorting bar */}
             <div className="space-y-2">
@@ -1063,20 +798,6 @@ export const TripFormModal: React.FC<TripFormModalProps> = ({
         </form>
 
       </div>
-
-      {/* Camera Document Scanner Modal */}
-      <CameraNameScannerModal
-        isOpen={isCameraScannerOpen}
-        onClose={() => setIsCameraScannerOpen(false)}
-        employees={employees}
-        departments={departments}
-        allTrips={allTrips}
-        tanggalMulai={tanggalMulai}
-        tanggalSelesai={tanggalSelesai}
-        currentTripId={tripToEdit?.id}
-        authToken={authToken}
-        onApplyEmployees={handleApplyFromScanner}
-      />
     </div>
   );
 };

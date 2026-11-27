@@ -1,12 +1,12 @@
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
@@ -16,9 +16,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-// Body parser for handling camera base64 photos up to 50MB
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // --- Server-Side Auth & Operator Persistence ---
 function resolveDataDir(): string {
@@ -261,26 +260,10 @@ function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFuncti
 // Initialize auth store on server boot
 ensureUsersFile();
 
-// Initialize Google GenAI client if GEMINI_API_KEY is available
-const apiKey = process.env.GEMINI_API_KEY;
-let ai: GoogleGenAI | null = null;
-
-if (apiKey) {
-  ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
-
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    hasApiKey: Boolean(apiKey),
     timestamp: new Date().toISOString(),
   });
 });
@@ -557,161 +540,10 @@ app.delete('/api/operators/:id', requireAuth, requireAdmin, (req: AuthenticatedR
   });
 });
 
-// Document / Camera photo scanning endpoint (Requires authentication)
-app.post('/api/scan-document', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { imageBase64, mimeType = 'image/jpeg', manualText } = req.body;
-
-    // 1. If manual text is supplied directly (fallback / text paste mode)
-    if (manualText && typeof manualText === 'string') {
-      const extractedNames = parseNamesFromRawText(manualText);
-      return res.json({
-        success: true,
-        detectedNames: extractedNames,
-        source: 'text_parser',
-        extractedDetails: extractDetailsFromText(manualText),
-      });
-    }
-
-    // 2. If camera photo/image is supplied
-    if (!imageBase64) {
-      return res.status(400).json({
-        success: false,
-        error: 'Tidak ada gambar atau teks yang dikirim untuk di-scan.',
-      });
-    }
-
-    // Clean base64 string if data URL prefix exists
-    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
-
-    // Check if Gemini AI is initialized
-    if (!ai) {
-      console.warn('GEMINI_API_KEY is not configured. Falling back to local OCR / text detection simulation.');
-      return res.json({
-        success: true,
-        detectedNames: [],
-        source: 'no_api_key',
-        message: 'Kunci API Gemini belum dikonfigurasi pada server.',
-      });
-    }
-
-    // Prompt Gemini multimodal vision model
-    const imagePart = {
-      inlineData: {
-        mimeType,
-        data: cleanBase64,
-      },
-    };
-
-    const textPart = {
-      text: `Anda adalah sistem OCR cerdas untuk aplikasi KENDALI SPPD (Sistem Informasi Manajemen Surat Perintah Perjalanan Dinas) pemerintahan di Indonesia.
-Dokumen yang dikirimkan adalah foto/scan/gambar konsep daftar petugas, Surat Tugas, SPPD, Nota Dinas, Surat Keputusan, atau Daftar Hadir pegawai.
-
-TUGAS UTAMA:
-1. Temukan dan baca seluruh nama pegawai / petugas yang ditugaskan beserta NIP (Nomor Induk Pegawai) jika tercantum pada gambar/tabel.
-2. Bersihkan nomor urut, tanda kurung, atau kata-kata pembuka. Kembalikan dalam format "Nama Lengkap - NIP" jika NIP tersedia, atau "Nama Lengkap" jika hanya nama yang tercantum (dan jika hanya NIP yang terbaca jelas, kembalikan NIP tersebut).
-3. Jika terlihat jelas, ekstrak juga informasi dokumen seperti nomor surat, nama kegiatan, lokasi tujuan, dan tanggal pelaksanaan (format YYYY-MM-DD).
-
-KEMBALIKAN HANYA JSON VALID DENGAN FORMAT BERIKUT (TANPA MARKDOWN):
-{
-  "detectedNames": [
-    "Nama Pegawai 1 - 198503152010011002",
-    "Nama Pegawai 2"
-  ],
-  "extractedDetails": {
-    "nomorSurat": "nomor surat tugas jika ada, atau null",
-    "namaKegiatan": "kegiatan jika ada, atau null",
-    "tujuan": "tujuan lokasi jika ada, atau null",
-    "tanggalMulai": "YYYY-MM-DD jika ada, atau null",
-    "tanggalSelesai": "YYYY-MM-DD jika ada, atau null"
-  },
-  "rawSummary": "Ringkasan dokumen yang terbaca"
-}`,
-    };
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: { parts: [imagePart, textPart] },
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
-
-    const outputText = response.text || '{}';
-    let parsedData: {
-      detectedNames?: string[];
-      extractedDetails?: Record<string, string | null>;
-      rawSummary?: string;
-    } = {};
-
-    try {
-      parsedData = JSON.parse(outputText);
-    } catch {
-      // Clean possible markdown code fences if any
-      const cleanedJson = outputText.replace(/```json/gi, '').replace(/```/g, '').trim();
-      parsedData = JSON.parse(cleanedJson);
-    }
-
-    return res.json({
-      success: true,
-      detectedNames: parsedData.detectedNames || [],
-      extractedDetails: parsedData.extractedDetails || {},
-      rawSummary: parsedData.rawSummary || '',
-      source: 'gemini_vision',
-    });
-  } catch (error) {
-    console.error('Error scanning document with Gemini:', error);
-    return res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Gagal memproses gambar dokumen',
-      detectedNames: [],
-    });
-  }
-});
-
-// Helper for parsing raw text when user pastes text or camera OCR fallback
-function parseNamesFromRawText(text: string): string[] {
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const names: string[] = [];
-
-  for (const line of lines) {
-    // Strip bullet points, numbering like "1. ", "a. ", "- "
-    let clean = line.replace(/^(\d+[\.\)]|[a-zA-Z][\.\)]|[-•*])\s*/, '').trim();
-
-    // Check for "Nama :" or "Nama:" prefix
-    const nameMatch = clean.match(/(?:Nama|Pegawai|Nama\s*Lengkap)\s*[:=]\s*(.+)/i);
-    if (nameMatch) {
-      clean = nameMatch[1].trim();
-    }
-
-    // Skip generic headings
-    if (
-      clean.length >= 3 &&
-      !clean.match(/^(surat|tugas|perjalanan|dinas|pemerintah|kepada|untuk|nomor|dasar|menimbang|mengingat|ditetapkan|pada\s*tanggal)/i)
-    ) {
-      names.push(clean);
-    }
-  }
-
-  return Array.from(new Set(names));
-}
-
-function extractDetailsFromText(text: string): Record<string, string | null> {
-  const nomorMatch = text.match(/(?:Nomor|No\.?)\s*[:=]\s*([0-9A-Za-z\/\.\-_]+)/i);
-  const tujuanMatch = text.match(/(?:Tujuan|Tempat|Ke)\s*[:=]\s*([^\n\r]+)/i);
-  const kegiatanMatch = text.match(/(?:Dalam\s*Rangka|Kegiatan|Acara|Untuk)\s*[:=]\s*([^\n\r]+)/i);
-
-  return {
-    nomorSurat: nomorMatch ? nomorMatch[1].trim() : null,
-    tujuan: tujuanMatch ? tujuanMatch[1].trim() : null,
-    namaKegiatan: kegiatanMatch ? kegiatanMatch[1].trim() : null,
-    tanggalMulai: null,
-    tanggalSelesai: null,
-  };
-}
-
 // Start Server and mount Vite / Static
 async function startServer() {
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (req, res) => {
@@ -720,13 +552,17 @@ async function startServer() {
   } else {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        ws: { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server SIM-SPPD full-stack running on http://0.0.0.0:${PORT}`);
   });
 }

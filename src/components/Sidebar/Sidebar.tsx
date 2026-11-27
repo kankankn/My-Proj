@@ -142,10 +142,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
               <div>
                 <span className="font-extrabold text-base tracking-tight text-slate-900 dark:text-white block leading-tight">
-                  SIM-SPPD
+                  SIM-SPPD <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">v3.1</span>
                 </span>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium line-clamp-1">
-                  Sistem Perjalanan Dinas
+                  Sistem Perjalanan Dinas · Versi 3.1
                 </p>
               </div>
             </div>

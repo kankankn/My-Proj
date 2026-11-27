@@ -937,7 +937,6 @@ export default function App() {
         allTrips={trips}
         holidays={holidays}
         lockedBidangId={operatorBidangId}
-        authToken={authToken}
       />
 
       {/* 2. Day Details Modal (View day events & availability matrix) */}
