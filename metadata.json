@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Pengecekan & Kalender Perjalanan Dinas",
+  "description": "Aplikasi kalender interaktif untuk manajemen dan pengecekan perjalanan dinas pegawai dengan inisial bidang pemberi perintah dan proteksi bentrok jadwal harian.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
